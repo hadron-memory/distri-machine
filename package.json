@@ -15,6 +15,9 @@
   ],
   "license": "MIT",
   "author": "Hadron Memory",
+  "publishConfig": {
+    "access": "public"
+  },
   "homepage": "https://github.com/hadron-memory/distri-machine#readme",
   "repository": {
     "type": "git",
