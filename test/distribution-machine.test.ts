@@ -264,6 +264,41 @@ describe('override map (D6)', () => {
     });
     expect(m.check({ requestId: 'req-1' }, new Map())).toBe('A');
   });
+
+  it('supports numeric subject ids', () => {
+    const m = new DistributionMachine({ buckets, overrides: { '123': 'B' } });
+    expect(m.check({ id: 123 }, new Map())).toBe('B');
+  });
+});
+
+describe('tally isolation', () => {
+  it('counts only this machine\'s buckets, ignoring foreign keys in a shared map', () => {
+    const m = new DistributionMachine({
+      buckets: [
+        { name: 'A', target_fraction: 0.5 },
+        { name: 'B', target_fraction: 0.5 },
+      ],
+      shuffle: true,
+    });
+    // A shared map polluted with another experiment's large counts must not
+    // skew this machine's fractions: the first A/B assignment still lands.
+    const dist = new Map<string, number>([['other-exp', 10_000]]);
+    const result = m.check({ id: '1' }, dist);
+    expect(['A', 'B']).toContain(result);
+    expect(dist.get(result!)).toBe(1);
+    expect(dist.get('other-exp')).toBe(10_000);
+  });
+});
+
+describe('rule parsing', () => {
+  it('throws at construction for an invalid JSON-encoded rule', () => {
+    expect(
+      () =>
+        new DistributionMachine({
+          buckets: [{ name: 'bad', rule: '{ not valid json' }],
+        }),
+    ).toThrow(/bucket "bad"/);
+  });
 });
 
 describe('determinism via injected RNG', () => {

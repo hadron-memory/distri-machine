@@ -2,6 +2,7 @@ import { applyRule } from './json-logic.js';
 import type {
   Bucket,
   DistributionMachineOptions,
+  JsonLogicRule,
   Variable,
 } from './types.js';
 
@@ -37,6 +38,10 @@ export class DistributionMachine<T extends object = object> {
   private readonly random: () => number;
   /** Buckets sorted by `sort_index` once, for filter mode. */
   private readonly sorted: readonly Bucket[];
+  /** `$vars` data per bucket, built once — bucket config is static. */
+  private readonly prebuiltVars = new Map<Bucket, Record<string, unknown>>();
+  /** JsonLogic rule per bucket, parsed once (JSON strings parsed eagerly). */
+  private readonly parsedRules = new Map<Bucket, JsonLogicRule>();
 
   constructor(options: DistributionMachineOptions) {
     this.buckets = options.buckets;
@@ -47,6 +52,16 @@ export class DistributionMachine<T extends object = object> {
     this.sorted = [...options.buckets].sort(
       (a, b) => (a.sort_index ?? 0) - (b.sort_index ?? 0),
     );
+
+    // Pre-build per-bucket variables and pre-parse rules so the hot path does
+    // no allocation or JSON parsing. A bad JSON rule fails fast here, not
+    // mid-traffic.
+    for (const bucket of options.buckets) {
+      this.prebuiltVars.set(bucket, buildVars(bucket.variables));
+      if (bucket.rule !== undefined) {
+        this.parsedRules.set(bucket, parseRuleFor(bucket));
+      }
+    }
   }
 
   /**
@@ -62,18 +77,26 @@ export class DistributionMachine<T extends object = object> {
   check(subject: T, distribution: Map<string, number>): string | null {
     const subj = subject as Record<string, unknown>;
 
-    // D6: the override map wins before any bucket logic.
+    // D6: the override map wins before any bucket logic. Subject ids may be
+    // numeric; the map is keyed by string.
     const id = subj[this.idKey];
     if (
-      typeof id === 'string' &&
-      Object.prototype.hasOwnProperty.call(this.overrides, id)
+      (typeof id === 'string' || typeof id === 'number') &&
+      Object.prototype.hasOwnProperty.call(this.overrides, String(id))
     ) {
-      return this.overrides[id]!;
+      return this.overrides[String(id)]!;
+    }
+
+    // Total over *this machine's* buckets only, computed once: O(B) per check,
+    // and isolated from any other counts the host may keep in the same map.
+    let total = 0;
+    for (const bucket of this.buckets) {
+      total += distribution.get(bucket.name) ?? 0;
     }
 
     const order = this.shuffle ? this.shuffled() : this.sorted;
     for (const bucket of order) {
-      if (this.accepts(bucket, subj, distribution)) {
+      if (this.accepts(bucket, subj, distribution, total)) {
         distribution.set(bucket.name, (distribution.get(bucket.name) ?? 0) + 1);
         return bucket.name;
       }
@@ -85,10 +108,9 @@ export class DistributionMachine<T extends object = object> {
     bucket: Bucket,
     subject: Record<string, unknown>,
     distribution: Map<string, number>,
+    total: number,
   ): boolean {
     if (bucket.target_fraction !== undefined) {
-      let total = 0;
-      for (const n of distribution.values()) total += n;
       // Zero-total guard: an empty map gives 0/0 = NaN, and NaN <= target is
       // false, which would reject the very first item. Treat total-zero (and a
       // missing key) as cur_fraction = 0 so the first item lands.
@@ -100,9 +122,13 @@ export class DistributionMachine<T extends object = object> {
       return cur <= bucket.target_fraction;
     }
 
-    if (bucket.rule !== undefined) {
-      const data = { ...subject, [VARS_KEY]: buildVars(bucket.variables) };
-      return Boolean(applyRule(bucket.rule, data));
+    const rule = this.parsedRules.get(bucket);
+    if (rule !== undefined) {
+      const data = {
+        ...subject,
+        [VARS_KEY]: this.prebuiltVars.get(bucket) ?? {},
+      };
+      return Boolean(applyRule(rule, data));
     }
 
     return false;
@@ -112,7 +138,8 @@ export class DistributionMachine<T extends object = object> {
   private shuffled(): Bucket[] {
     const arr = [...this.buckets];
     for (let i = arr.length - 1; i > 0; i--) {
-      const j = Math.floor(this.random() * (i + 1));
+      // Clamp to [0, i] in case an injected RNG returns a value >= 1.
+      const j = Math.min(i, Math.floor(this.random() * (i + 1)));
       [arr[i], arr[j]] = [arr[j]!, arr[i]!];
     }
     return arr;
@@ -125,4 +152,18 @@ function buildVars(variables?: Variable[]): Record<string, unknown> {
   if (!variables) return vars;
   for (const v of variables) vars[v.name] = v.value;
   return vars;
+}
+
+/** Parse a bucket's rule (accepting a JSON string), with a clear error. */
+function parseRuleFor(bucket: Bucket): JsonLogicRule {
+  const { rule } = bucket;
+  if (typeof rule !== 'string') return rule as JsonLogicRule;
+  try {
+    return JSON.parse(rule) as JsonLogicRule;
+  } catch (cause) {
+    throw new Error(
+      `distri-machine: bucket "${bucket.name}" has an invalid JSON-encoded rule`,
+      { cause },
+    );
+  }
 }

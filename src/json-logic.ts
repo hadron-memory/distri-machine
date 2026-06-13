@@ -3,6 +3,8 @@ import jsonLogic from 'json-logic-js';
 import type { JsonLogicRule } from './types.js';
 
 let opsRegistered = false;
+/** Compiled-RegExp cache keyed by `pattern::flags` — patterns are static. */
+const regexCache = new Map<string, RegExp>();
 
 /**
  * Register custom operators on the json-logic-js singleton, once.
@@ -19,11 +21,15 @@ function ensureOps(): void {
     'regex',
     (value: unknown, pattern: unknown, flags?: unknown): boolean => {
       if (value == null || pattern == null) return false;
+      const patternStr = String(pattern);
+      const flagsStr = flags == null ? '' : String(flags);
+      const cacheKey = `${patternStr}::${flagsStr}`;
       try {
-        const re = new RegExp(
-          String(pattern),
-          flags == null ? undefined : String(flags),
-        );
+        let re = regexCache.get(cacheKey);
+        if (re === undefined) {
+          re = new RegExp(patternStr, flagsStr || undefined);
+          regexCache.set(cacheKey, re);
+        }
         return re.test(String(value));
       } catch {
         // Invalid pattern/flags → no match rather than throwing into check().
