@@ -1,0 +1,60 @@
+{
+  "name": "@hadron-memory/distri-machine",
+  "version": "0.1.0",
+  "description": "A small traffic-bucketing library for A/B testing: fraction-balanced or JsonLogic-filter assignment, with host-owned state.",
+  "keywords": [
+    "ab-testing",
+    "ab",
+    "bucketing",
+    "experiment",
+    "feature-flag",
+    "jsonlogic",
+    "traffic-split",
+    "distribution",
+    "randomization"
+  ],
+  "license": "MIT",
+  "author": "Hadron Memory",
+  "homepage": "https://github.com/hadron-memory/distri-machine#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hadron-memory/distri-machine.git"
+  },
+  "bugs": {
+    "url": "https://github.com/hadron-memory/distri-machine/issues"
+  },
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "sideEffects": false,
+  "scripts": {
+    "build": "tsup",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run build"
+  },
+  "dependencies": {
+    "json-logic-js": "^2.0.5"
+  },
+  "devDependencies": {
+    "@types/json-logic-js": "^2.0.8",
+    "tsup": "^8.3.5",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
